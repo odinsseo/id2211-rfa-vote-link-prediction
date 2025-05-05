@@ -6,12 +6,11 @@ import csv
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from time import mktime
 from typing import Dict, List
 
-from dateutil import parser
+from wiki_common import Cache, UsernameHandler, WikiAPI
 from wiki_elections_parser import ElectionParser
-
-from .wiki_common import Cache, WikiAPI
 
 # Configure logging
 logging.basicConfig(
@@ -84,7 +83,7 @@ class AdminExtractor:
                 continue
 
             username = event["title"].lower()
-            timestamp = parser.parse(event["timestamp"])
+            timestamp = datetime.fromtimestamp(mktime(event["timestamp"]))
 
             # Only include entries before the cutoff date
             if timestamp > self.cutoff_date:
@@ -102,8 +101,13 @@ class AdminExtractor:
 class CSVExporter:
     """Exports data to CSV files."""
 
-    @staticmethod
-    def export_admin_data(admins: Dict[str, AdminPromotion], filename: str) -> None:
+    def __init__(self, wiki_api: WikiAPI):
+        """Initialize with WikiAPI instance."""
+        self.username_handler = UsernameHandler(wiki_api)
+
+    def export_admin_data(
+        self, admins: Dict[str, AdminPromotion], filename: str
+    ) -> None:
         """Export admin data to a CSV file.
 
         Args:
@@ -118,8 +122,9 @@ class CSVExporter:
             writer.writerow(["username", "promotion_date", "promotion_timestamp"])
 
             for admin in sorted_admins:
+                normalized_username = self.username_handler.normalize(admin.username)
                 writer.writerow(
-                    [admin.username, admin.date_string, admin.timestamp_string]
+                    [normalized_username, admin.date_string, admin.timestamp_string]
                 )
 
 
@@ -182,10 +187,16 @@ def main():
         # Initialize components
         cache = Cache(args.cache_dir)
         wiki_api = WikiAPI(cache)
+        wiki_api.connect()
 
         # Get log entries
         logger.info("Retrieving user rights log entries...")
-        log_entries = wiki_api.site.logs("rights", dir="newer", limit=50000)
+        log_entries = wiki_api.site.logevents(
+            "rights",
+            dir="newer",
+            end=args.cutoff_date.isoformat(),
+            api_chunk_size=500,
+        )
 
         # Extract admin promotions
         logger.info("Extracting admin promotions...")
@@ -194,7 +205,7 @@ def main():
 
         # Export to CSV
         logger.info("Exporting data to CSV...")
-        exporter = CSVExporter()
+        exporter = CSVExporter(wiki_api)
         exporter.export_admin_data(admins, args.output_file)
 
         logger.info(f"Data exported to {args.output_file}")

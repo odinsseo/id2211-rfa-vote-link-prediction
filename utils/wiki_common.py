@@ -211,9 +211,12 @@ class UsernameHandler:
         if not username:
             return ""
 
-        # Remove IP prefix
-        if username.startswith("ip:"):
+        # Remove prefix
+        lower_username = username.lower()
+        if lower_username.startswith("ip:"):
             username = username[3:]
+        elif lower_username.startswith("user:"):
+            username = username[5:]
 
         # Apply username changes
         return self.wiki_api.username_changes.get(username, username)

@@ -198,9 +198,9 @@ class DumpProcessor:
 
                         if not entry.is_valid():
                             invalid += 1
-                        elif not self.username_handler.is_bot(
+                        elif not self.parser.username_handler.is_bot(
                             entry.source
-                        ) and not self.username_handler.is_bot(entry.target):
+                        ) and not self.parser.username_handler.is_bot(entry.target):
                             current_chunk.append(entry)
                             processed += 1
                         else:
@@ -228,9 +228,9 @@ class DumpProcessor:
 
                     if not entry.is_valid():
                         invalid += 1
-                    elif not self.username_handler.is_bot(
+                    elif not self.parser.username_handler.is_bot(
                         entry.source
-                    ) and not self.username_handler.is_bot(entry.target):
+                    ) and not self.parser.username_handler.is_bot(entry.target):
                         current_chunk.append(entry)
                         processed += 1
                     else:
