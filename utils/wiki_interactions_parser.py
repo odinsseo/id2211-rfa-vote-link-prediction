@@ -4,8 +4,8 @@
 import argparse
 import logging
 
-from .wiki_common import Cache, UsernameHandler, WikiAPI
-from .wiki_revision_parser import CSVWriter, DumpProcessor, RevisionParser
+from wiki_common import Cache, UsernameHandler, WikiAPI
+from wiki_revision_parser import CSVWriter, DumpProcessor, RevisionParser
 
 # Configure logging
 logging.basicConfig(
