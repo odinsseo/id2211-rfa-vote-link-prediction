@@ -17,11 +17,13 @@ This project investigates user behavior patterns in social networks, particularl
 │   ├── wiki_interactions_parser.py # Process user interactions
 │   └── wiki_revision_parser.py # Parse revision history
 └── preliminary_analysis.ipynb # Initial data analysis notebook
+```
 
 ## Setup
 
 1. Clone the repository
-2. Create and activate a Python virtual environment:
+1. Create and activate a Python virtual environment:
+
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
