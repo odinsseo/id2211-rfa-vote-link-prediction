@@ -4,11 +4,10 @@
 import argparse
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import List
+from typing import Dict, List
 
+from wiki_base_parser import CSVWriter, DumpParser, DumpProcessor
 from wiki_common import Cache, UsernameHandler, WikiAPI
-from wiki_revision_parser import CSVWriter, DumpProcessor
 
 # Configure logging
 logging.basicConfig(
@@ -43,14 +42,14 @@ class ArticleTalkRevision:
         return bool(self.user and self.namespace)
 
 
-class ArticleTalkParser:
+class ArticleTalkParser(DumpParser):
     """Parser for article talk page revisions."""
 
     def __init__(self, username_handler: UsernameHandler):
         """Initialize with username handler."""
         self.username_handler = username_handler
 
-    def parse_line(self, line: str) -> dict:
+    def parse_line(self, line: str) -> Dict:
         """Parse a REVISION line.
 
         Args:
@@ -121,94 +120,26 @@ class ArticleTalkParser:
         return entry
 
 
-class ArticleTalkDumpProcessor(DumpProcessor):
+class ArticleTalkProcessor(DumpProcessor):
     """Process Wikipedia dumps and extract article talk revision data."""
 
     def __init__(self, parser: ArticleTalkParser, writer: CSVWriter):
         """Initialize with parser and writer instances."""
-        self.parser = parser
-        self.writer = writer
+        super().__init__(parser, writer)
+        self.article_parser = parser
 
-    def process_file(self, input_file: str, chunk_size: int = 10000) -> None:
-        """Process dump file and generate article talk data.
+    def should_process_entry(self, entry: ArticleTalkRevision) -> bool:
+        """Check if an article talk revision should be processed.
+
+        Filters out bot-generated entries.
 
         Args:
-            input_file: Path to input dump file
-            chunk_size: Number of entries to process in each chunk
+            entry: The revision entry to check
+
+        Returns:
+            True if the user is not a bot
         """
-        logger.info(f"Processing file: {input_file}")
-
-        if not Path(input_file).exists():
-            logger.error(f"Input file not found: {input_file}")
-            return
-
-        # Initialize counters and buffers
-        processed = skipped = invalid = 0
-        current_chunk = []
-        current_lines = []
-
-        # Create output file with headers
-        with open(
-            self.writer.output_file, "w", newline="", encoding="utf-8"
-        ) as csvfile:
-            csvfile.write("user,namespace,timestamp,minor,textdata\n")
-
-        try:
-            with self._open_file(input_file) as file:
-                for line in file:
-                    line = line.strip()
-
-                    # Process completed entry when new REVISION line is found
-                    if line.startswith("REVISION") and current_lines:
-                        entry = self.parser.parse_entry(current_lines)
-
-                        if not entry.is_valid():
-                            invalid += 1
-                        elif not self.parser.username_handler.is_bot(entry.user):
-                            current_chunk.append(entry)
-                            processed += 1
-                        else:
-                            skipped += 1
-
-                        # Start new entry
-                        current_lines = [line]
-
-                        # Write chunk if full
-                        if len(current_chunk) >= chunk_size:
-                            self.writer.write_entries(current_chunk)
-                            current_chunk = []
-
-                            # Log progress
-                            if processed % (chunk_size * 10) == 0:
-                                logger.info(
-                                    f"Progress: {processed} processed, {skipped} skipped"
-                                )
-                    else:
-                        current_lines.append(line)
-
-                # Process final entry
-                if current_lines:
-                    entry = self.parser.parse_entry(current_lines)
-
-                    if not entry.is_valid():
-                        invalid += 1
-                    elif not self.parser.username_handler.is_bot(entry.user):
-                        current_chunk.append(entry)
-                        processed += 1
-                    else:
-                        skipped += 1
-
-                # Write remaining entries
-                if current_chunk:
-                    self.writer.write_entries(current_chunk)
-
-            logger.info(
-                f"Complete: {processed} processed, {skipped} skipped, {invalid} invalid"
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing file: {e}")
-            raise
+        return not self.article_parser.username_handler.is_bot(entry.user)
 
 
 def extract_article_talk_data(
@@ -230,9 +161,13 @@ def extract_article_talk_data(
         cache = Cache(cache_dir)
         wiki_api = WikiAPI(cache)
         username_handler = UsernameHandler(wiki_api)
+
+        # Create parser and writer with headers
         parser = ArticleTalkParser(username_handler)
-        writer = CSVWriter(output_file)
-        processor = ArticleTalkDumpProcessor(parser, writer)
+        writer = CSVWriter(
+            output_file, headers=["user", "namespace", "timestamp", "minor", "textdata"]
+        )
+        processor = ArticleTalkProcessor(parser, writer)
 
         # Process the dump file
         processor.process_file(input_file, chunk_size)

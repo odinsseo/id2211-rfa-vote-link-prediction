@@ -1,14 +1,10 @@
 """Wikipedia revision parsing functionality."""
 
-import bz2
-import csv
-import gzip
 import logging
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, List, Optional, TextIO
+from typing import Dict, List, Optional
 
-from tqdm import tqdm
+from wiki_base_parser import CSVWriter, DumpParser, DumpProcessor
 from wiki_common import UsernameHandler
 
 # Configure logging
@@ -44,7 +40,7 @@ class RevisionEntry:
         return bool(self.source and self.target)
 
 
-class RevisionParser:
+class RevisionParser(DumpParser):
     """Parses revision entries from Wikipedia dump."""
 
     def __init__(self, username_handler: UsernameHandler):
@@ -127,125 +123,26 @@ class RevisionParser:
         return entry
 
 
-class CSVWriter:
-    """Handles writing revision data to CSV files."""
-
-    def __init__(self, output_file: str):
-        """Initialize with output file path."""
-        self.output_file = Path(output_file)
-
-    def create_csv(self) -> None:
-        """Create a CSV file with header row."""
-        with open(self.output_file, "w", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(["source", "target", "timestamp", "minor", "textdata"])
-
-    def write_entries(self, entries: List[RevisionEntry]) -> None:
-        """Write entries to CSV file.
-
-        Args:
-            entries: List of RevisionEntry objects to write
-        """
-        with open(self.output_file, "a", newline="", encoding="utf-8") as csvfile:
-            writer = csv.writer(csvfile)
-            for entry in entries:
-                writer.writerow(entry.to_row())
-
-
-class DumpProcessor:
+class RevisionProcessor(DumpProcessor):
     """Process Wikipedia dumps and extract revision data."""
 
     def __init__(self, parser: RevisionParser, writer: CSVWriter):
         """Initialize with parser and writer instances."""
-        self.parser = parser
-        self.writer = writer
+        super().__init__(parser, writer)
+        self.revision_parser = parser
 
-    def _open_file(self, filename: str) -> TextIO:
-        """Open a file with appropriate handler based on extension."""
-        if filename.endswith(".gz"):
-            return gzip.open(filename, "rt", encoding="utf-8", errors="replace")
-        elif filename.endswith(".bz2"):
-            return bz2.open(filename, "rt", encoding="utf-8", errors="replace")
-        return open(filename, "r", encoding="utf-8", errors="replace")
+    def should_process_entry(self, entry: RevisionEntry) -> bool:
+        """Check if a revision entry should be processed.
 
-    def process_file(self, input_file: str, chunk_size: int = 10000) -> None:
-        """Process dump file and generate interaction data.
+        Filters out bot-generated entries.
 
         Args:
-            input_file: Path to input dump file
-            chunk_size: Number of entries to process in each chunk
+            entry: The revision entry to check
+
+        Returns:
+            True if neither source nor target is a bot
         """
-        logger.info(f"Processing file: {input_file}")
-
-        if not Path(input_file).exists():
-            logger.error(f"Input file not found: {input_file}")
-            return
-
-        # Initialize counters and buffers
-        processed = skipped = invalid = 0
-        current_chunk = []
-        current_lines = []
-
-        # Create output file
-        self.writer.create_csv()
-
-        try:
-            with self._open_file(input_file) as file:
-                for line in tqdm(file, desc="Processing dump"):
-                    line = line.strip()
-
-                    # Process completed entry when new REVISION line is found
-                    if line.startswith("REVISION") and current_lines:
-                        entry = self.parser.parse_entry(current_lines)
-
-                        if not entry.is_valid():
-                            invalid += 1
-                        elif not self.parser.username_handler.is_bot(
-                            entry.source
-                        ) and not self.parser.username_handler.is_bot(entry.target):
-                            current_chunk.append(entry)
-                            processed += 1
-                        else:
-                            skipped += 1
-
-                        # Start new entry
-                        current_lines = [line]
-
-                        # Write chunk if full
-                        if len(current_chunk) >= chunk_size:
-                            self.writer.write_entries(current_chunk)
-                            current_chunk = []
-
-                            # Log progress
-                            if processed % (chunk_size * 10) == 0:
-                                logger.info(
-                                    f"Progress: {processed} processed, {skipped} skipped"
-                                )
-                    else:
-                        current_lines.append(line)
-
-                # Process final entry
-                if current_lines:
-                    entry = self.parser.parse_entry(current_lines)
-
-                    if not entry.is_valid():
-                        invalid += 1
-                    elif not self.parser.username_handler.is_bot(
-                        entry.source
-                    ) and not self.parser.username_handler.is_bot(entry.target):
-                        current_chunk.append(entry)
-                        processed += 1
-                    else:
-                        skipped += 1
-
-                # Write remaining entries
-                if current_chunk:
-                    self.writer.write_entries(current_chunk)
-
-            logger.info(
-                f"Complete: {processed} processed, {skipped} skipped, {invalid} invalid"
-            )
-
-        except Exception as e:
-            logger.error(f"Error processing file: {e}")
-            raise
+        return not (
+            self.revision_parser.username_handler.is_bot(entry.source)
+            or self.revision_parser.username_handler.is_bot(entry.target)
+        )

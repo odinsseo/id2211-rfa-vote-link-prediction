@@ -1,23 +1,43 @@
 # Network Analysis Project
 
-This project investigates user behavior patterns in social networks, particularly focusing on Wikipedia admin elections and user interactions.
+This project investigates user behavior patterns in social networks, focusing on Wikipedia admin elections and user interactions.
 
 ## Project Structure
 
 ```text
 ├── data/                      # Data files (not included in repo)
-│   ├── enwiki-*.txt          # Wikipedia user talk page dumps
-│   ├── wikiElec.*.txt        # Wikipedia election data
-│   ├── individual_votes.csv   # Processed election votes
-│   └── user_talk.csv         # Processed user interactions
+│   ├── enwiki-*.bz2          # Wikipedia dump files
+│   │   ├── user_talk.bz2     # User talk page interactions
+│   │   └── talk.bz2          # Article talk page interactions
+│   ├── wikiElec.*.txt.gz     # Wikipedia election data
+│   ├── admins.csv            # Processed admin promotions
+│   ├── article_talk.csv      # Article talk page interactions
+│   ├── individual_votes.csv  # Election votes
+│   ├── nominations.csv       # Election nominations
+│   └── user_talk.csv        # User talk interactions
 ├── utils/                    # Utility modules for data processing
+│   ├── wiki_base_parser.py  # Base classes for dump processing
+│   ├── wiki_common.py       # Shared utilities (caching, API, etc.)
 │   ├── wiki_admin_fetcher.py # Extract admin promotions
-│   ├── wiki_common.py        # Shared Wikipedia processing utils
 │   ├── wiki_elections_parser.py # Parse election data
-│   ├── wiki_interactions_parser.py # Process user interactions
-│   └── wiki_revision_parser.py # Parse revision history
-└── preliminary_analysis.ipynb # Initial data analysis notebook
+│   ├── wiki_revision_parser.py # Parse user talk revisions
+│   ├── wiki_article_talk_parser.py # Parse article talk data
+│   └── wiki_interactions_parser.py # Process user interactions
+└── preliminary_analysis.ipynb # Data analysis notebook
+
 ```
+
+## Architecture
+
+The project follows a modular architecture with shared base classes and utilities:
+
+- `DumpEntry` protocol: Defines interface for all dump entries
+- `CSVWriter`: Handles CSV file output
+- `DumpParser`: Base class for parsing different dump formats
+- `DumpProcessor`: Base class for processing dumps with chunking and filtering
+- `Cache`: Caches API results and bot lists
+- `WikiAPI`: Handles Wikipedia API interactions
+- `UsernameHandler`: Normalizes usernames and detects bots
 
 ## Setup
 
@@ -35,59 +55,62 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Additional dependencies for analysis
-pip install pandas networkx
+pip install pandas networkx jupyter
 ```
 
 ## Dependencies
 
 ### Core Dependencies (requirements.txt)
 
-- beautifulsoup4==4.13.4
-- mwclient==0.11.0
-- requests==2.32.3
-- tqdm==4.66.1
+- beautifulsoup4==4.13.4 - HTML parsing for bot list extraction
+- mwclient==0.11.0 - Wikipedia API client
+- requests==2.32.3 - HTTP requests for API access
+- tqdm==4.66.1 - Progress bars for long operations
 
-### Additional Dependencies for Analysis
+### Analysis Dependencies
 
-- pandas
-- networkx
+- pandas - Data manipulation and analysis
+- networkx - Network/graph analysis
+- jupyter - Interactive analysis environment
 
-## Usage
+## Data Processing Pipeline
 
-### Wikipedia Data Processing
-
-1. Process election data:
-
-```bash
-python -m utils.wiki_elections_parser input_file nominations.csv votes.csv
-```
-
-1. Extract user interactions:
+### 1. Admin Data Collection
 
 ```bash
-python -m utils.wiki_interactions_parser input_file output.csv
+python -m utils.wiki_admin_fetcher 2008-01-04 data/admins.csv
 ```
 
-1. Fetch admin information:
+Fetches all admin promotions before the cutoff date, with username normalization.
+
+### 2. Election Data Processing
 
 ```bash
-python -m utils.wiki_admin_fetcher YYYY-MM-DD admins.csv
+python -m utils.wiki_elections_parser data/wikiElec.ElecBs3.txt.gz data/nominations.csv data/votes.csv
 ```
 
-### Analysis
+Processes election data into:
 
-The `preliminary_analysis_stefano.ipynb` notebook contains initial analysis of:
+- Nominations: nominator, nominee, timestamp, outcome
+- Votes: voter, candidate, vote value, timestamps
 
-- Network construction from interaction data
-- Graph metrics computation
-- Activity patterns analysis
+### 3. User Interactions Processing
 
-## Data Description
+```bash
+# Process user talk interactions
+python -m utils.wiki_interactions_parser data/enwiki-20080103.user_talk.bz2 data/user_talk.csv
 
-The project uses two main data sources:
+# Process article talk interactions
+python -m utils.wiki_article_talk_parser data/enwiki-20080103.talk.bz2 data/article_talk.csv
+```
 
-1. Wikipedia admin elections and user interactions
-2. Twitter Higgs boson announcement cascade data (following/follower networks and user activities)
+All processors handle:
+
+- Compressed dump reading (bz2, gz)
+- Bot filtering
+- Username normalization
+- Chunk-based processing for memory efficiency
+- Progress tracking and logging
 
 ## License
 

@@ -4,8 +4,9 @@
 import argparse
 import logging
 
+from wiki_base_parser import CSVWriter
 from wiki_common import Cache, UsernameHandler, WikiAPI
-from wiki_revision_parser import CSVWriter, DumpProcessor, RevisionParser
+from wiki_revision_parser import RevisionParser, RevisionProcessor
 
 # Configure logging
 logging.basicConfig(
@@ -34,9 +35,13 @@ def build_graph(
         cache = Cache(cache_dir)
         wiki_api = WikiAPI(cache)
         username_handler = UsernameHandler(wiki_api)
+
+        # Create parser and writer with headers
         parser = RevisionParser(username_handler)
-        writer = CSVWriter(output_file)
-        processor = DumpProcessor(parser, writer)
+        writer = CSVWriter(
+            output_file, headers=["source", "target", "timestamp", "minor", "textdata"]
+        )
+        processor = RevisionProcessor(parser, writer)
 
         # Process the dump file
         processor.process_file(input_file, chunk_size)

@@ -2,13 +2,13 @@
 """Parser for Wikipedia admin election data."""
 
 import argparse
-import csv
 import logging
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
+from tqdm import tqdm
+from wiki_base_parser import CSVWriter, DumpParser, DumpProcessor
 from wiki_common import Cache, UsernameHandler, WikiAPI
 
 # Configure logging
@@ -75,56 +75,121 @@ class Election:
         self.votes.append(vote)
 
 
-class ElectionParser:
+class ElectionParser(DumpParser):
     """Parser for Wikipedia election data."""
 
     def __init__(self, username_handler: UsernameHandler):
         """Initialize with username handler."""
         self.username_handler = username_handler
 
-    def parse_file(self, input_path: Path) -> List[Election]:
-        """Parse elections from input file.
+    def parse_line(self, line: str) -> Optional[Dict]:
+        """Parse a line from the election data.
 
         Args:
-            input_path: Path to the input file
+            line: A single line from the election file
 
         Returns:
-            List of parsed Election objects
+            Dictionary with parsed data or None if parsing failed
         """
-        logger.info(f"Parsing elections from {input_path}")
+        parts = line.split("\t")
+        if len(parts) < 2:
+            return None
 
-        if not input_path.exists():
-            raise FileNotFoundError(f"Input file not found: {input_path}")
+        code = parts[0]
+        data = {"code": code}
 
-        try:
-            with open(
-                input_path, "r", encoding="utf-8", errors="surrogateescape"
-            ) as file:
-                content = file.read()
+        if code == "E":
+            data["outcome"] = int(parts[1])
+        elif code == "T":
+            data["close_time"] = parts[1]
+        elif code == "U" and len(parts) >= 3:
+            data["nominee"] = self.username_handler.normalize(parts[2])
+        elif code == "N" and len(parts) >= 3:
+            data["nominator"] = self.username_handler.normalize(parts[2])
+        elif code == "V" and len(parts) >= 5:
+            data.update(
+                {
+                    "voter": self.username_handler.normalize(parts[4]),
+                    "value": int(parts[1]),
+                    "timestamp": parts[3],
+                }
+            )
 
-            # Remove comments and split into election entries
-            content = self._remove_comments(content)
-            election_entries = self._split_entries(content)
+        return data
 
-            # Parse each election entry
-            elections = []
-            for entry in election_entries:
-                if not entry.strip():
-                    continue
+    def parse_entry(self, lines: List[str]) -> Election:
+        """Parse a complete election entry.
 
-                try:
-                    election = self._parse_entry(entry)
-                    if election.is_valid:
-                        elections.append(election)
-                except Exception as e:
-                    logger.warning(f"Error parsing election entry: {e}")
+        Args:
+            lines: List of lines making up an election entry
 
-            logger.info(f"Successfully parsed {len(elections)} elections")
-            return elections
+        Returns:
+            Election object with parsed data
+        """
+        election = Election()
 
-        except Exception as e:
-            logger.error(f"Error reading input file: {e}")
-            raise
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            if data := self.parse_line(line):
+                code = data["code"]
+
+                if code == "E":
+                    election.outcome = data["outcome"]
+                elif code == "T":
+                    election.close_time = data["close_time"]
+                elif code == "U":
+                    election.nominee = data["nominee"]
+                elif code == "N":
+                    election.nominator = data["nominator"]
+                elif code == "V":
+                    voter = data["voter"]
+                    if not self.username_handler.is_bot(voter):
+                        vote = Vote(
+                            voter=voter,
+                            value=data["value"],
+                            timestamp=data["timestamp"],
+                        )
+                        election.add_vote(vote)
+
+        return election
+
+
+class ElectionProcessor(DumpProcessor):
+    """Process Wikipedia election dumps."""
+
+    def __init__(
+        self,
+        parser: ElectionParser,
+        nominations_writer: CSVWriter,
+        votes_writer: CSVWriter,
+    ):
+        """Initialize with parser and writers."""
+        super().__init__(parser, nominations_writer)
+        self.votes_writer = votes_writer
+        self.election_parser = parser
+
+    def _split_entries(self, content: str) -> List[List[str]]:
+        """Split content into election entries."""
+        content = self._remove_comments(content)
+        entries = []
+        current_entry = []
+
+        for line in content.split("\n"):
+            line = line.strip()
+            if not line:
+                if current_entry:
+                    entries.append(current_entry)
+                    current_entry = []
+            else:
+                current_entry.append(line)
+
+        if current_entry:
+            entries.append(current_entry)
+
+        return entries
 
     def _remove_comments(self, content: str) -> str:
         """Remove comment lines from content."""
@@ -132,67 +197,45 @@ class ElectionParser:
             line for line in content.split("\n") if not line.strip().startswith("#")
         )
 
-    def _split_entries(self, content: str) -> List[str]:
-        """Split content into individual election entries."""
-        return re.split(r"\n\s*\n", content)
-
-    def _parse_entry(self, entry: str) -> Election:
-        """Parse a single election entry."""
-        lines = entry.strip().split("\n")
-        election = Election()
-
-        for line in lines:
-            if not line.strip():
-                continue
-
-            parts = line.split("\t")
-            if len(parts) < 2:
-                continue
-
-            code = parts[0]
-
-            if code == "E":
-                election.outcome = int(parts[1])
-            elif code == "T":
-                election.close_time = parts[1]
-            elif code == "U" and len(parts) >= 3:
-                election.nominee = self.username_handler.normalize(parts[2])
-            elif code == "N" and len(parts) >= 3:
-                election.nominator = self.username_handler.normalize(parts[2])
-            elif code == "V" and len(parts) >= 5:
-                voter = self.username_handler.normalize(parts[4])
-                if not self.username_handler.is_bot(voter):
-                    vote = Vote(voter=voter, value=int(parts[1]), timestamp=parts[3])
-                    election.add_vote(vote)
-
-        return election
-
-
-class ElectionExporter:
-    """Exports election data to CSV files."""
-
-    def __init__(self, nominations_path: Path, votes_path: Path):
-        """Initialize with output paths."""
-        self.nominations_path = nominations_path
-        self.votes_path = votes_path
-
-    def export(self, elections: List[Election]) -> None:
-        """Export elections to CSV files.
+    def process_file(self, input_file: str, chunk_size: int = 10000) -> None:
+        """Process election file and generate data.
 
         Args:
-            elections: List of Election objects to export
+            input_file: Path to input file
+            chunk_size: Number of entries to process in each chunk
         """
-        self._export_nominations(elections)
-        self._export_votes(elections)
+        logger.info(f"Processing file: {input_file}")
 
-    def _export_nominations(self, elections: List[Election]) -> None:
-        """Export nominations data."""
-        with open(self.nominations_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["nominator", "nominee", "close_time", "outcome"])
+        if not Path(input_file).exists():
+            logger.error(f"Input file not found: {input_file}")
+            return
 
-            for election in elections:
-                writer.writerow(
+        try:
+            with open(input_file, "r", encoding="utf-8", errors="surrogateescape") as f:
+                content = f.read()
+
+            # Split into election entries
+            entries = self._split_entries(content)
+
+            # Initialize counters
+            processed = invalid = 0
+            nominations_chunk = []
+            votes_chunk = []
+
+            # Create output files
+            self.writer.create_csv()  # Nominations file
+            self.votes_writer.create_csv()
+
+            # Process entries
+            for entry_lines in tqdm(entries, desc="Processing elections"):
+                election = self.parser.parse_entry(entry_lines)
+
+                if not election.is_valid:
+                    invalid += 1
+                    continue
+
+                # Add to nominations chunk
+                nominations_chunk.append(
                     [
                         election.nominator,
                         election.nominee,
@@ -201,18 +244,9 @@ class ElectionExporter:
                     ]
                 )
 
-        logger.info(f"Exported {len(elections)} nominations to {self.nominations_path}")
-
-    def _export_votes(self, elections: List[Election]) -> None:
-        """Export individual votes data."""
-        vote_count = 0
-        with open(self.votes_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["voter", "candidate", "vote", "vote_time", "close_time"])
-
-            for election in elections:
+                # Add to votes chunk
                 for vote in election.votes:
-                    writer.writerow(
+                    votes_chunk.append(
                         [
                             vote.voter,
                             election.nominee,
@@ -221,9 +255,26 @@ class ElectionExporter:
                             election.close_time,
                         ]
                     )
-                    vote_count += 1
 
-        logger.info(f"Exported {vote_count} votes to {self.votes_path}")
+                processed += 1
+
+                # Write chunks if full
+                if len(nominations_chunk) >= chunk_size:
+                    self.writer.write_entries(nominations_chunk)
+                    self.votes_writer.write_entries(votes_chunk)
+                    nominations_chunk = []
+                    votes_chunk = []
+
+            # Write remaining chunks
+            if nominations_chunk:
+                self.writer.write_entries(nominations_chunk)
+                self.votes_writer.write_entries(votes_chunk)
+
+            logger.info(f"Complete: {processed} processed, {invalid} invalid")
+
+        except Exception as e:
+            logger.error(f"Error processing file: {e}")
+            raise
 
 
 def parse_elections(
@@ -246,13 +297,19 @@ def parse_elections(
         wiki_api = WikiAPI(cache)
         username_handler = UsernameHandler(wiki_api)
 
-        # Parse elections
+        # Create parser and writers
         parser = ElectionParser(username_handler)
-        elections = parser.parse_file(Path(input_file))
+        nominations_writer = CSVWriter(
+            nominations_file, headers=["nominator", "nominee", "close_time", "outcome"]
+        )
+        votes_writer = CSVWriter(
+            votes_file,
+            headers=["voter", "candidate", "vote", "vote_time", "close_time"],
+        )
 
-        # Export data
-        exporter = ElectionExporter(Path(nominations_file), Path(votes_file))
-        exporter.export(elections)
+        # Process elections
+        processor = ElectionProcessor(parser, nominations_writer, votes_writer)
+        processor.process_file(input_file)
 
         return True
 
