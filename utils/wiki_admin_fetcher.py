@@ -82,7 +82,7 @@ class AdminExtractor:
             if not self.is_admin_promotion(event):
                 continue
 
-            username = event["title"].lower()
+            username = event["title"].lower().replace(" ", "_")
             timestamp = datetime.fromtimestamp(mktime(event["timestamp"]))
 
             # Only include entries before the cutoff date
