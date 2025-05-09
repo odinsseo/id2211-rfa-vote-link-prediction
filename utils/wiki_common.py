@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional, Set
@@ -227,5 +228,15 @@ class UsernameHandler:
         if not username:
             return False
 
+        # Regular expression pattern
+        # Matches:
+        # - "bot" (case insensitive)
+        # - Followed by any combination of numbers and special characters (or none)
+        # - At the end of the string
+        pattern = r"bot[\d\W]*$"
+
+        # Compile the pattern with case insensitivity flag
+        bot_regex = re.compile(pattern, re.IGNORECASE)
+
         normalized = self.normalize(username)
-        return normalized in self.wiki_api.bots
+        return normalized in self.wiki_api.bots or bool(bot_regex.search(normalized))
