@@ -52,10 +52,22 @@ class CSVWriter:
         Args:
             entries: List of entry objects to write
         """
-        with open(self.output_file, "a", newline="", encoding="utf-8") as csvfile:
+        # Create the file in binary mode to handle Unicode properly
+        with open(self.output_file, "a", newline="", encoding="utf-8", errors="ignore") as csvfile:
             writer = csv.writer(csvfile)
             for entry in entries:
-                writer.writerow(entry.to_row())
+                try:
+                    # Clean any problematic characters from the row data
+                    row = []
+                    for field in entry.to_row():
+                        if isinstance(field, str):
+                            # Remove any non-UTF8 characters
+                            field = field.encode('utf-8', 'ignore').decode('utf-8')
+                        row.append(field)
+                    writer.writerow(row)
+                except Exception as e:
+                    logger.warning(f"Error writing entry: {e}")
+                    continue
 
 
 class DumpParser(ABC):
