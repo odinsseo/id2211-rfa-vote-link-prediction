@@ -106,13 +106,22 @@ class BipartiteMetricsCalculator:
         total_weight = B.in_degree(u, weight="weight") + B.in_degree(v, weight="weight")
 
         # Compute all metrics using the pre-computed weights
+        breadth_u = B.in_degree(u)
+        breadth_v = B.in_degree(v)
         basic_weight = self.compute_basic_weight(common_neighbors, nbr_weights)
         weighted_jaccard = self.compute_weighted_jaccard(all_neighbors, nbr_weights)
         participation_entropy, mutual_info = self.compute_entropy_and_mutual_info(
             all_neighbors, nbr_weights, total_weight
         )
 
-        return basic_weight, weighted_jaccard, participation_entropy, mutual_info
+        return (
+            breadth_u,
+            breadth_v,
+            basic_weight,
+            weighted_jaccard,
+            participation_entropy,
+            mutual_info,
+        )
 
 
 class GraphFeatureExtractor:
@@ -132,8 +141,8 @@ class GraphFeatureExtractor:
         if valid_candidate is None:
             return pd.DataFrame(
                 columns=[
-                    "user1",
-                    "user2",
+                    "voter",
+                    "candidate",
                     "collaboration",
                     "pairwise_jaccard",
                     "participation_entropy",
@@ -147,8 +156,8 @@ class GraphFeatureExtractor:
         if not pairs:
             return pd.DataFrame(
                 columns=[
-                    "user1",
-                    "user2",
+                    "voter",
+                    "candidate",
                     "collaboration",
                     "pairwise_jaccard",
                     "participation_entropy",
@@ -158,19 +167,23 @@ class GraphFeatureExtractor:
 
         # Pre-allocate metrics list
         metrics = []
-        for user1, user2 in pairs:
+        for voter, valid_candidate in pairs:
             # Compute metrics for each pair
             (
+                breadth_voter,
+                breadth_candidate,
                 basic_w,
                 jaccard_w,
                 entropy,
                 mutual_info,
-            ) = self.bipartite_calculator.weight_function(B, user1, user2)
+            ) = self.bipartite_calculator.weight_function(B, voter, valid_candidate)
 
             metrics.append(
                 {
-                    "user1": user1,
-                    "user2": user2,
+                    "voter": voter,
+                    "candidate": valid_candidate,
+                    "breadth_voter": breadth_voter,
+                    "breadth_candidate": breadth_candidate,
                     "collaboration": basic_w,
                     "pairwise_jaccard": jaccard_w,
                     "participation_entropy": entropy,
@@ -193,13 +206,13 @@ class GraphFeatureExtractor:
         if valid_candidate is None:
             return pd.DataFrame(
                 columns=[
-                    "user1",
-                    "user2",
+                    "voter",
+                    "candidate",
                     "jaccard",
                     "adamic_adar",
                     "pref_attachment",
-                    "pagerank_1",
-                    "pagerank_2",
+                    "pagerank_voter",
+                    "pagerank_candidate",
                 ]
             )
 
@@ -209,13 +222,13 @@ class GraphFeatureExtractor:
         if not pairs:
             return pd.DataFrame(
                 columns=[
-                    "user1",
-                    "user2",
+                    "voter",
+                    "candidate",
                     "jaccard",
                     "adamic_adar",
                     "pref_attachment",
-                    "pagerank_1",
-                    "pagerank_2",
+                    "pagerank_voter",
+                    "pagerank_candidate",
                 ]
             )
 
@@ -231,13 +244,13 @@ class GraphFeatureExtractor:
         for u, v in pairs:
             metrics.append(
                 {
-                    "user1": u,
-                    "user2": v,
+                    "voter": u,
+                    "candidate": v,
                     "jaccard": jaccard[(u, v)],
                     "adamic_adar": adamic_adar[(u, v)],
                     "pref_attachment": pref_attach[(u, v)],
-                    "pagerank_1": pagerank[u],
-                    "pagerank_2": pagerank[v],
+                    "pagerank_voter": pagerank[u],
+                    "pagerank_candidate": pagerank[v],
                 }
             )
 
@@ -371,13 +384,16 @@ def main():
     logging.info("Loading article edits data in chunks...")
     article_data = []
     for chunk in tqdm(pd.read_csv(args.article_edits, chunksize=1000000)):
-        chunk["timestamp"] = pd.to_datetime(chunk["timestamp"])
+        chunk["timestamp"] = (
+            pd.to_datetime(chunk["timestamp"]).values.astype(np.int64) // 10**9
+        )
+        chunk["timestamp"] = pd.to_datetime(chunk["timestamp"], unit="s")
         chunk["minor"] = chunk["minor"].astype(bool)
-        chunk["user"] = chunk["user"].astype("category")
-        chunk["namespace"] = chunk["namespace"].astype("category")
         article_data.append(chunk)
 
     article_edits = pd.concat(article_data, ignore_index=True)
+    chunk["user"] = chunk["user"].astype("category")
+    chunk["namespace"] = chunk["namespace"].astype("category")
     logging.info(f"Loaded {len(article_edits):,} article edits")
 
     logging.info("Loading voting data...")
@@ -421,8 +437,16 @@ def main():
 
             # Merge metrics and save
             features = pd.merge(
-                bipartite_metrics, monopartite_metrics, on=["user1", "user2"]
+                bipartite_metrics, monopartite_metrics, on=["voter", "candidate"]
             )
+
+            edit_counts = (
+                article_edits[article_edits["timestamp"] <= date]
+                .groupby("user", observed=True)
+                .size()
+            )
+            features["voter_edits"] = features["voter"].map(edit_counts)
+            features["candidate_edits"] = features["candidate"].map(edit_counts)
 
             if not features.empty:
                 output_file = (
