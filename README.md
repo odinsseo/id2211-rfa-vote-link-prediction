@@ -70,13 +70,7 @@ Components for generating and processing features:
 1. Create and activate a Python virtual environment:
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-1. Install required packages:
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -174,4 +168,4 @@ The complete analysis and modeling process is documented in:
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+MIT License - See LICENSE file for details

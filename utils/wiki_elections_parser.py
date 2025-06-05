@@ -8,6 +8,41 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from tqdm import tqdm
+from dataclasses import dataclass
+
+@dataclass
+class NominationEntry:
+    """Wrapper for nomination entries to implement DumpEntry protocol."""
+    nominator: str
+    nominee: str
+    close_time: str
+    outcome: int
+
+    def to_row(self) -> List:
+        """Convert to CSV row format."""
+        return [self.nominator, self.nominee, self.close_time, self.outcome]
+
+    def is_valid(self) -> bool:
+        """All fields are required."""
+        return all([self.nominator, self.nominee, self.close_time, self.outcome is not None])
+
+@dataclass
+class VoteEntry:
+    """Wrapper for vote entries to implement DumpEntry protocol."""
+    voter: str
+    candidate: str
+    vote: int
+    vote_time: str
+    close_time: str
+
+    def to_row(self) -> List:
+        """Convert to CSV row format."""
+        return [self.voter, self.candidate, self.vote, self.vote_time, self.close_time]
+
+    def is_valid(self) -> bool:
+        """All fields are required."""
+        return all([self.voter, self.candidate, self.vote_time, self.close_time])
+
 from wiki_base_parser import CSVWriter, DumpParser, DumpProcessor
 from wiki_common import Cache, UsernameHandler, WikiAPI
 
@@ -36,6 +71,10 @@ class Vote:
     def is_oppose(self) -> bool:
         """Check if this is an opposing vote."""
         return self.value < 0
+
+    def to_row(self) -> List:
+        """Convert to CSV row format."""
+        return [self.voter, None, self.value, self.timestamp, None]  # nominee and close_time set later
 
 
 @dataclass
@@ -73,6 +112,10 @@ class Election:
     def add_vote(self, vote: Vote) -> None:
         """Add a vote to this election."""
         self.votes.append(vote)
+
+    def to_row(self) -> List:
+        """Convert to CSV row format."""
+        return [self.nominator, self.nominee, self.close_time, self.outcome]
 
 
 class ElectionParser(DumpParser):
@@ -235,40 +278,52 @@ class ElectionProcessor(DumpProcessor):
                     continue
 
                 # Add to nominations chunk
-                nominations_chunk.append(
-                    [
-                        election.nominator,
-                        election.nominee,
-                        election.close_time,
-                        election.outcome,
-                    ]
+                nomination = NominationEntry(
+                    nominator=election.nominator,
+                    nominee=election.nominee,
+                    close_time=election.close_time,
+                    outcome=election.outcome
                 )
+                nominations_chunk.append(nomination)
 
                 # Add to votes chunk
                 for vote in election.votes:
-                    votes_chunk.append(
-                        [
-                            vote.voter,
-                            election.nominee,
-                            vote.value,
-                            vote.timestamp,
-                            election.close_time,
-                        ]
+                    vote_entry = VoteEntry(
+                        voter=vote.voter,
+                        candidate=election.nominee,
+                        vote=vote.value,
+                        vote_time=vote.timestamp,
+                        close_time=election.close_time
                     )
+                    votes_chunk.append(vote_entry)
 
                 processed += 1
 
-                # Write chunks if full
-                if len(nominations_chunk) >= chunk_size:
+            # Write chunks if full
+            if len(nominations_chunk) >= chunk_size:
+                try:
                     self.writer.write_entries(nominations_chunk)
                     self.votes_writer.write_entries(votes_chunk)
-                    nominations_chunk = []
-                    votes_chunk = []
+                except UnicodeEncodeError as e:
+                    # Filter out problematic characters
+                    nominations_chunk = [[str(field).encode('ascii', 'ignore').decode() for field in entry.to_row()] for entry in nominations_chunk]
+                    votes_chunk = [[str(field).encode('ascii', 'ignore').decode() for field in entry.to_row()] for entry in votes_chunk]
+                    self.writer.write_entries(nominations_chunk)
+                    self.votes_writer.write_entries(votes_chunk)
+                nominations_chunk = []
+                votes_chunk = []
 
             # Write remaining chunks
             if nominations_chunk:
-                self.writer.write_entries(nominations_chunk)
-                self.votes_writer.write_entries(votes_chunk)
+                try:
+                    self.writer.write_entries(nominations_chunk)
+                    self.votes_writer.write_entries(votes_chunk)
+                except UnicodeEncodeError as e:
+                    # Filter out problematic characters
+                    nominations_chunk = [[str(field).encode('ascii', 'ignore').decode() for field in entry.to_row()] for entry in nominations_chunk]
+                    votes_chunk = [[str(field).encode('ascii', 'ignore').decode() for field in entry.to_row()] for entry in votes_chunk]
+                    self.writer.write_entries(nominations_chunk)
+                    self.votes_writer.write_entries(votes_chunk)
 
             logger.info(f"Complete: {processed} processed, {invalid} invalid")
 
